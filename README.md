@@ -8,7 +8,7 @@ Try it out at: https://qoqosz.github.io/Workout-Timer/
 
 ## Preview
 
-![Screenshot.png]
+![Screenshot](Screenshot.png)
 
 ## Features
 
