@@ -2,6 +2,14 @@
 
 A simple, vibe coded, modern web-based workout timer with local storage for tracking your fitness sessions.
 
+## Try
+
+Try it out at: https://qoqosz.github.io/Workout-Timer/
+
+## Preview
+
+![Screenshot.png]
+
 ## Features
 
 - **Interval Timer**: Set custom workout and rest intervals
