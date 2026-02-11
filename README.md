@@ -1,4 +1,4 @@
-# PulseForge Workout Timer
+# Workout Timer
 
 A modern browser-based workout timer for building structured interval workouts and running them in a full-screen, focused mode.
 
@@ -121,7 +121,7 @@ Validation and clamping are applied on import:
 ## Getting Started
 
 1. Clone or download this repository.
-2. Open `/Users/qoqosz/Documents/Coding/timer/index.html` in a browser.
+2. Open `Workout-Timer/index.html` in a browser.
 3. Build your workout and click `Start Workout`.
 
 No install step is required.
@@ -129,7 +129,7 @@ No install step is required.
 ## File Structure
 
 ```txt
-timer/
+Workout-Timer/
 ├── index.html
 ├── styles.css
 ├── script.js
