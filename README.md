@@ -1,92 +1,142 @@
-# Workout Timer App
+# PulseForge Workout Timer
 
-A simple, vibe coded, modern web-based workout timer with local storage for tracking your fitness sessions.
+A modern browser-based workout timer for building structured interval workouts and running them in a full-screen, focused mode.
 
 ## Try
 
-Try it out at: https://qoqosz.github.io/Workout-Timer/
+Try it at: https://qoqosz.github.io/Workout-Timer/
 
 ## Preview
 
 ![Screenshot](Screenshot.png)
 
-## Features
+## What Changed
 
-- **Interval Timer**: Set custom workout and rest intervals
-- **Local Storage**: Automatically saves your workout history and settings
-- **Responsive Design**: Works perfectly on desktop and mobile devices
-- **Keyboard Shortcuts**: Quick controls for better user experience
-- **Workout History**: Track your previous workouts with detailed information
-- **Modern UI**: Clean, beautiful interface with smooth animations
+The app was rebuilt with a new workout model and UI:
 
-## How to Use
+- Structured workout builder with editable blocks
+- Single exercises with per-exercise repeats
+- Repeatable exercise groups (circuits)
+- Per-item repeats inside groups
+- Full-screen runner with clear current-step focus
+- Pre-start countdown
+- Pause/resume, skip, and stop controls during a run
+- JSON import/export
+- Persistent state via `localStorage`
 
-1. **Open the App**: Simply open `index.html` in your web browser
-2. **Configure Settings**:
-   - Set your workout duration (in minutes)
-   - Set your rest duration (in minutes)
-   - Choose the number of intervals
-3. **Start Your Workout**: Click the "Start" button or press the spacebar
-4. **Control the Timer**:
-   - **Start/Pause**: Spacebar or click the Start/Pause button
-   - **Reset**: Ctrl+R (Cmd+R on Mac) or click the Reset button
-5. **View History**: Your completed workouts are automatically saved and displayed
+## Core Features
 
-## Timer Modes
+- Workout name and configurable countdown (0-30 seconds)
+- Exercise blocks:
+  - `name`
+  - `duration` (seconds)
+  - `repeats`
+- Group blocks:
+  - group `name`
+  - group `repeats`
+  - nested exercise items, each with:
+    - `name`
+    - `duration` (seconds)
+    - `repeats`
+- Block and item management:
+  - add
+  - reorder
+  - duplicate
+  - delete
+- Live summary of total intervals and workout duration
 
-The app automatically cycles between:
-- **Workout Phase**: Your main exercise time
-- **Rest Phase**: Recovery time between intervals
+## Runner Behavior
 
-The timer will automatically switch between these phases based on your settings.
+- Opens as a full-screen overlay
+- Shows:
+  - current stage (countdown/running/paused/finished)
+  - current exercise name
+  - interval metadata
+  - main timer
+  - step and total progress bars
+- Controls:
+  - Pause/Resume
+  - Skip current interval (or skip countdown)
+  - Stop/Close
 
 ## Keyboard Shortcuts
 
-- **Spacebar**: Start/Pause timer
-- **Ctrl+R** (or **Cmd+R** on Mac): Reset timer
+When runner overlay is open:
 
-## Local Storage
+- `Space`: Pause/Resume
+- `ArrowRight`: Skip current step
+- `Escape`: Stop/Close
 
-The app automatically saves:
-- Your workout history (last 20 workouts)
-- Timer settings (workout time, rest time, intervals)
-- All data is stored locally in your browser
+## Data Persistence
 
-## Browser Compatibility
+Workout data is saved automatically in browser `localStorage` under:
 
-Works in all modern browsers:
-- Chrome
-- Firefox
-- Safari
-- Edge
+- `pulseforge-workout-v1`
 
-## File Structure
+No backend is used. Data stays in the browser unless exported.
 
+## Import / Export JSON
+
+Use the top-right buttons:
+
+- `Export JSON`: downloads current workout as `.json`
+- `Import JSON`: replaces current workout from a selected `.json` file
+
+Supported structure (top-level `workout` is optional):
+
+```json
+{
+  "version": 1,
+  "workout": {
+    "name": "Evening Conditioning",
+    "countdown": 5,
+    "steps": [
+      {
+        "type": "exercise",
+        "name": "Jump Rope",
+        "duration": 45,
+        "repeats": 2
+      },
+      {
+        "type": "group",
+        "name": "Upper Body Circuit",
+        "repeats": 2,
+        "items": [
+          { "name": "Push-ups", "duration": 40, "repeats": 1 },
+          { "name": "Rest", "duration": 20, "repeats": 1 },
+          { "name": "Plank", "duration": 30, "repeats": 1 }
+        ]
+      }
+    ]
+  }
+}
 ```
-timer/
-├── index.html      # Main HTML file
-├── styles.css      # CSS styles
-├── script.js       # JavaScript functionality
-└── README.md       # This file
-```
+
+Validation and clamping are applied on import:
+
+- countdown: `0..30`
+- duration: `1..3600`
+- repeats: `1..20`
 
 ## Getting Started
 
-1. Download or clone the files to your local machine
-2. Open `index.html` in your web browser
-3. Start your first workout!
+1. Clone or download this repository.
+2. Open `/Users/qoqosz/Documents/Coding/timer/index.html` in a browser.
+3. Build your workout and click `Start Workout`.
 
-No installation or setup required - it's a pure web app that runs entirely in your browser.
+No install step is required.
 
-## Customization
+## File Structure
 
-You can easily customize the app by modifying:
-- **Colors**: Edit the CSS variables in `styles.css`
-- **Default Settings**: Change the default values in `script.js`
-- **Features**: Add new functionality by extending the JavaScript class
+```txt
+timer/
+├── index.html
+├── styles.css
+├── script.js
+├── Screenshot.png
+└── README.md
+```
 
-## Privacy
+## Browser Support
 
-All data is stored locally in your browser's localStorage. No data is sent to external servers or shared with third parties.
-
-Enjoy your workouts! 💪
+Works in modern Chromium, Firefox, Safari, and Edge builds with standard ES6+ support.

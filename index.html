@@ -3,78 +3,89 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Workout Timer</title>
+    <title>PulseForge Workout Timer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Hack:wght@400&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Workout Timer</h1>
-            <p>Track your workouts with precision</p>
-            <div class="start-workout-container">
-                <button id="startWorkoutBtn" class="btn btn-success btn-large">Start Workout</button>
+    <div class="mesh" aria-hidden="true"></div>
+
+    <main class="app-shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow">Workout Studio</p>
+                <h1>Build and run interval workouts that stay in flow.</h1>
+                <p class="lead">Create exercises, nest them in repeatable groups, then launch a full-screen runner with countdown, pause, and skip.</p>
+            </div>
+            <div class="hero-actions">
+                <button id="importBtn" class="btn btn-ghost" type="button">Import JSON</button>
+                <button id="exportBtn" class="btn btn-ghost" type="button">Export JSON</button>
+                <input id="importInput" type="file" accept="application/json,.json" hidden>
             </div>
         </header>
 
-        <main>
-            <!-- Exercise Builder Section -->
-            <div class="exercise-builder">
-                <h2>Exercise Builder</h2>
-                <div class="builder-controls">
-                    <button id="addExerciseBtn" class="btn btn-primary">Add Exercise</button>
-                    <button id="addRestBtn" class="btn btn-secondary">Add Rest</button>
-                    <button id="addGroupBtn" class="btn btn-secondary">Add Group</button>
-                    <button id="saveWorkoutBtn" class="btn btn-primary">Save Workout</button>
+        <section class="builder card" aria-label="Workout builder">
+            <div class="builder-top">
+                <label class="field">
+                    <span>Workout Name</span>
+                    <input id="workoutName" type="text" maxlength="80" placeholder="Evening Conditioning">
+                </label>
+                <label class="field countdown-field">
+                    <span>Start Countdown (sec)</span>
+                    <input id="countdownInput" type="number" min="0" max="30" step="1">
+                </label>
+            </div>
+
+            <div class="action-row">
+                <button id="addExerciseBtn" class="btn btn-primary" type="button">Add Exercise</button>
+                <button id="addRestBtn" class="btn btn-secondary" type="button">Add Rest</button>
+                <button id="addGroupBtn" class="btn btn-secondary" type="button">Add Group</button>
+                <button id="clearWorkoutBtn" class="btn btn-danger" type="button">Clear</button>
+                <button id="startWorkoutBtn" class="btn btn-accent" type="button">Start Workout</button>
+            </div>
+
+            <div id="planSummary" class="summary"></div>
+            <div id="stepsContainer" class="steps" aria-live="polite"></div>
+        </section>
+    </main>
+
+    <section id="runnerOverlay" class="runner-overlay" aria-label="Workout runner" aria-hidden="true">
+        <div class="runner-noise" aria-hidden="true"></div>
+        <div class="runner-content">
+            <p id="runnerStage" class="runner-stage">Get Ready</p>
+            <h2 id="runnerExerciseName" class="runner-exercise">Exercise</h2>
+            <p id="runnerExerciseMeta" class="runner-meta">Interval 1 of 1</p>
+            <p id="runnerTimer" class="runner-timer">00:00</p>
+
+            <div class="progress-stack">
+                <div class="progress-head">
+                    <span>Current Step</span>
+                    <span id="stepProgressText">00:00 / 00:00</span>
+                </div>
+                <div class="progress-track">
+                    <div id="stepProgressBar" class="progress-fill"></div>
                 </div>
 
-                <div class="exercise-list" id="exerciseList">
-                    <!-- Exercises will be added here -->
+                <div class="progress-head">
+                    <span>Total Workout</span>
+                    <span id="totalProgressText">00:00 / 00:00</span>
                 </div>
-
-                <div class="saved-workouts">
-                    <h3>Saved Workouts</h3>
-                    <div class="workout-selector">
-                        <select id="workoutSelector">
-                            <option value="">Select a workout...</option>
-                        </select>
-                        <button id="loadWorkoutBtn" class="btn btn-secondary">Load</button>
-                        <button id="deleteWorkoutBtn" class="btn btn-danger">Delete</button>
-                    </div>
+                <div class="progress-track total-track">
+                    <div id="totalProgressBar" class="progress-fill"></div>
                 </div>
             </div>
 
-            <div class="workout-history">
-                <h2>Workout History</h2>
-                <div class="history-list" id="historyList">
-                    <!-- Workout history items will be populated here -->
-                </div>
-                <button id="clearHistory" class="btn btn-danger">Clear History</button>
-            </div>
-        </main>
-    </div>
-
-    <!-- Full Screen Timer Overlay -->
-    <div class="fullscreen-timer" id="fullscreenTimer">
-        <div class="fullscreen-content">
-            <div class="fullscreen-time" id="fullscreenTime">00:00</div>
-            <div class="fullscreen-progress" id="fullscreenProgress"></div>
-            <div class="fullscreen-controls">
-                <button id="fullscreenPauseBtn" class="btn btn-white">Pause</button>
-                <button id="fullscreenSkipBtn" class="btn btn-white">Skip</button>
-                <button id="fullscreenStopBtn" class="btn btn-white">Stop</button>
+            <div class="runner-actions">
+                <button id="pauseResumeBtn" class="btn btn-primary" type="button">Pause</button>
+                <button id="skipBtn" class="btn btn-secondary" type="button">Skip</button>
+                <button id="stopBtn" class="btn btn-danger" type="button">Stop</button>
             </div>
         </div>
-    </div>
+    </section>
 
-    <!-- Audio Elements -->
-    <audio id="tickSound" preload="auto">
-        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT" type="audio/wav">
-    </audio>
-    <audio id="bellSound" preload="auto">
-        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT" type="audio/wav">
-    </audio>
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
     <script src="script.js"></script>
 </body>

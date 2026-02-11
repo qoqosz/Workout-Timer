@@ -1,924 +1,1170 @@
-class WorkoutTimer {
+const STORAGE_KEY = "pulseforge-workout-v1";
+const STORAGE_SCHEMA_VERSION = 1;
+
+function uid(prefix) {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function clampInt(value, min, max, fallback) {
+    const number = Number.parseInt(value, 10);
+    if (Number.isNaN(number)) {
+        return fallback;
+    }
+    return Math.min(max, Math.max(min, number));
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+}
+
+function createGroupItem(overrides = {}) {
+    return {
+        id: uid("item"),
+        name: "Exercise",
+        duration: 30,
+        repeats: 1,
+        ...overrides
+    };
+}
+
+function createExercise(overrides = {}) {
+    return {
+        id: uid("step"),
+        type: "exercise",
+        name: "Exercise",
+        duration: 30,
+        repeats: 1,
+        ...overrides
+    };
+}
+
+function createGroup(overrides = {}) {
+    return {
+        id: uid("group"),
+        type: "group",
+        name: "Group",
+        repeats: 2,
+        items: [
+            createGroupItem({ name: "Work", duration: 40, repeats: 1 }),
+            createGroupItem({ name: "Rest", duration: 20, repeats: 1 })
+        ],
+        ...overrides
+    };
+}
+
+function buildDefaultWorkout() {
+    return {
+        name: "My Workout",
+        countdown: 5,
+        steps: [
+            createExercise({ name: "Jump Rope", duration: 45, repeats: 2 }),
+            createGroup({
+                name: "Upper Body Circuit",
+                repeats: 2,
+                items: [
+                    createGroupItem({ name: "Push-ups", duration: 40, repeats: 1 }),
+                    createGroupItem({ name: "Rest", duration: 20, repeats: 1 }),
+                    createGroupItem({ name: "Plank", duration: 30, repeats: 1 })
+                ]
+            })
+        ]
+    };
+}
+
+class WorkoutApp {
     constructor() {
-        this.isRunning = false;
-        this.isPaused = false;
-        this.currentTime = 0;
-        this.totalTime = 0;
-        this.interval = null;
-        this.workoutHistory = [];
-        this.exercises = [];
-        this.savedWorkouts = {};
-        this.currentExerciseIndex = 0;
-        this.currentGroupIndex = 0;
-        this.currentRepeat = 1;
-        this.totalRepeats = 1;
-        this.isFullscreen = false;
-        this.soundEnabled = true;
-        
-        this.initializeElements();
-        this.initializeAudio();
-        this.loadFromLocalStorage();
-        this.setupEventListeners();
-        this.updateDisplay();
-        this.renderHistory();
-        this.renderExerciseList();
-        this.updateWorkoutSelector();
+        this.workout = this.loadWorkout();
+        this.runner = this.createRunnerState();
+
+        this.workoutNameInput = document.getElementById("workoutName");
+        this.countdownInput = document.getElementById("countdownInput");
+        this.addExerciseBtn = document.getElementById("addExerciseBtn");
+        this.addRestBtn = document.getElementById("addRestBtn");
+        this.addGroupBtn = document.getElementById("addGroupBtn");
+        this.clearWorkoutBtn = document.getElementById("clearWorkoutBtn");
+        this.startWorkoutBtn = document.getElementById("startWorkoutBtn");
+        this.exportBtn = document.getElementById("exportBtn");
+        this.importBtn = document.getElementById("importBtn");
+        this.importInput = document.getElementById("importInput");
+
+        this.planSummary = document.getElementById("planSummary");
+        this.stepsContainer = document.getElementById("stepsContainer");
+
+        this.runnerOverlay = document.getElementById("runnerOverlay");
+        this.runnerStage = document.getElementById("runnerStage");
+        this.runnerExerciseName = document.getElementById("runnerExerciseName");
+        this.runnerExerciseMeta = document.getElementById("runnerExerciseMeta");
+        this.runnerTimer = document.getElementById("runnerTimer");
+        this.stepProgressText = document.getElementById("stepProgressText");
+        this.stepProgressBar = document.getElementById("stepProgressBar");
+        this.totalProgressText = document.getElementById("totalProgressText");
+        this.totalProgressBar = document.getElementById("totalProgressBar");
+
+        this.pauseResumeBtn = document.getElementById("pauseResumeBtn");
+        this.skipBtn = document.getElementById("skipBtn");
+        this.stopBtn = document.getElementById("stopBtn");
+
+        this.toastContainer = document.getElementById("toastContainer");
+
+        this.bindEvents();
+        this.render();
     }
 
-    initializeElements() {
-        // Exercise builder elements
-        this.addExerciseBtn = document.getElementById('addExerciseBtn');
-        this.addRestBtn = document.getElementById('addRestBtn');
-        this.addGroupBtn = document.getElementById('addGroupBtn');
-        this.saveWorkoutBtn = document.getElementById('saveWorkoutBtn');
-        this.startWorkoutBtn = document.getElementById('startWorkoutBtn');
-        this.exerciseList = document.getElementById('exerciseList');
-        this.workoutSelector = document.getElementById('workoutSelector');
-        this.loadWorkoutBtn = document.getElementById('loadWorkoutBtn');
-        this.deleteWorkoutBtn = document.getElementById('deleteWorkoutBtn');
-        
-        // History elements
-        this.historyList = document.getElementById('historyList');
-        this.clearHistoryBtn = document.getElementById('clearHistory');
-        
-        // Fullscreen elements
-        this.fullscreenTimer = document.getElementById('fullscreenTimer');
-        this.fullscreenTime = document.getElementById('fullscreenTime');
-        this.fullscreenProgress = document.getElementById('fullscreenProgress');
-        this.fullscreenPauseBtn = document.getElementById('fullscreenPauseBtn');
-        this.fullscreenSkipBtn = document.getElementById('fullscreenSkipBtn');
-        this.fullscreenStopBtn = document.getElementById('fullscreenStopBtn');
+    createRunnerState() {
+        return {
+            status: "idle",
+            sequence: [],
+            index: 0,
+            countdownRemaining: 0,
+            stepRemaining: 0,
+            totalRemaining: 0,
+            totalDuration: 0,
+            timerId: null
+        };
     }
 
-    initializeAudio() {
-        // Create audio elements for sounds
-        this.tickSound = new Audio();
-        this.bellSound = new Audio();
-        
-        // Generate simple tick sound (high-pitched beep)
-        this.createTickSound();
-        this.createBellSound();
-        
-        // Set volume levels
-        this.tickSound.volume = 0.3;
-        this.bellSound.volume = 0.5;
-    }
+    bindEvents() {
+        this.addExerciseBtn.addEventListener("click", () => {
+            this.workout.steps.push(createExercise());
+            this.commitAndRender();
+        });
 
-    createTickSound() {
-        // Create a realistic clock tick-tock sound using Web Audio API
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // Create a more complex tick sound with harmonics
-        const oscillator1 = audioContext.createOscillator();
-        const oscillator2 = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        const filter = audioContext.createBiquadFilter();
-        
-        oscillator1.connect(filter);
-        oscillator2.connect(filter);
-        filter.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        // Main frequency (tick sound)
-        oscillator1.frequency.setValueAtTime(1200, audioContext.currentTime);
-        oscillator1.type = 'sawtooth';
-        
-        // Harmonic frequency
-        oscillator2.frequency.setValueAtTime(2400, audioContext.currentTime);
-        oscillator2.type = 'sine';
-        
-        // Filter to make it sound more mechanical
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(2000, audioContext.currentTime);
-        filter.Q.setValueAtTime(2, audioContext.currentTime);
-        
-        gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.05);
-        
-        oscillator1.start(audioContext.currentTime);
-        oscillator2.start(audioContext.currentTime);
-        oscillator1.stop(audioContext.currentTime + 0.05);
-        oscillator2.stop(audioContext.currentTime + 0.05);
-        
-        // Store the audio context for reuse
-        this.audioContext = audioContext;
-    }
+        this.addRestBtn.addEventListener("click", () => {
+            this.workout.steps.push(createExercise({ name: "Rest", duration: 20, repeats: 1 }));
+            this.commitAndRender();
+        });
 
-    createBellSound() {
-        // Create a boxing ring bell sound using Web Audio API
-        const audioContext = this.audioContext || new (window.AudioContext || window.webkitAudioContext)();
-        
-        // Create a metallic bell sound with multiple oscillators
-        const oscillator1 = audioContext.createOscillator();
-        const oscillator2 = audioContext.createOscillator();
-        const oscillator3 = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        const filter = audioContext.createBiquadFilter();
-        
-        oscillator1.connect(filter);
-        oscillator2.connect(filter);
-        oscillator3.connect(filter);
-        filter.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        // Main bell frequency
-        oscillator1.frequency.setValueAtTime(800, audioContext.currentTime);
-        oscillator1.type = 'triangle';
-        
-        // Harmonic frequencies for metallic sound
-        oscillator2.frequency.setValueAtTime(1200, audioContext.currentTime);
-        oscillator2.type = 'sine';
-        
-        oscillator3.frequency.setValueAtTime(1600, audioContext.currentTime);
-        oscillator3.type = 'sine';
-        
-        // Filter for metallic resonance
-        filter.type = 'bandpass';
-        filter.frequency.setValueAtTime(1000, audioContext.currentTime);
-        filter.Q.setValueAtTime(8, audioContext.currentTime);
-        
-        gainNode.gain.setValueAtTime(0.6, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.0);
-        
-        oscillator1.start(audioContext.currentTime);
-        oscillator2.start(audioContext.currentTime);
-        oscillator3.start(audioContext.currentTime);
-        oscillator1.stop(audioContext.currentTime + 1.0);
-        oscillator2.stop(audioContext.currentTime + 1.0);
-        oscillator3.stop(audioContext.currentTime + 1.0);
-    }
+        this.addGroupBtn.addEventListener("click", () => {
+            this.workout.steps.push(createGroup());
+            this.commitAndRender();
+        });
 
-    playTickSound() {
-        if (!this.soundEnabled) return;
-        
-        try {
-            // Create a realistic clock tick-tock sound
-            const audioContext = this.audioContext || new (window.AudioContext || window.webkitAudioContext)();
-            
-            // Create a more complex tick sound with harmonics
-            const oscillator1 = audioContext.createOscillator();
-            const oscillator2 = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            const filter = audioContext.createBiquadFilter();
-            
-            oscillator1.connect(filter);
-            oscillator2.connect(filter);
-            filter.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            // Main frequency (tick sound)
-            oscillator1.frequency.setValueAtTime(1200, audioContext.currentTime);
-            oscillator1.type = 'sawtooth';
-            
-            // Harmonic frequency
-            oscillator2.frequency.setValueAtTime(2400, audioContext.currentTime);
-            oscillator2.type = 'sine';
-            
-            // Filter to make it sound more mechanical
-            filter.type = 'lowpass';
-            filter.frequency.setValueAtTime(2000, audioContext.currentTime);
-            filter.Q.setValueAtTime(2, audioContext.currentTime);
-            
-            gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.05);
-            
-            oscillator1.start(audioContext.currentTime);
-            oscillator2.start(audioContext.currentTime);
-            oscillator1.stop(audioContext.currentTime + 0.05);
-            oscillator2.stop(audioContext.currentTime + 0.05);
-        } catch (error) {
-            console.log('Tick sound not available:', error);
-        }
-    }
-
-    playBellSound() {
-        if (!this.soundEnabled) return;
-        
-        try {
-            // Play boxing ring bell sound
-            const audioContext = this.audioContext || new (window.AudioContext || window.webkitAudioContext)();
-            
-            // Create a metallic bell sound with multiple oscillators
-            const oscillator1 = audioContext.createOscillator();
-            const oscillator2 = audioContext.createOscillator();
-            const oscillator3 = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            const filter = audioContext.createBiquadFilter();
-            
-            oscillator1.connect(filter);
-            oscillator2.connect(filter);
-            oscillator3.connect(filter);
-            filter.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            // Main bell frequency
-            oscillator1.frequency.setValueAtTime(800, audioContext.currentTime);
-            oscillator1.type = 'triangle';
-            
-            // Harmonic frequencies for metallic sound
-            oscillator2.frequency.setValueAtTime(1200, audioContext.currentTime);
-            oscillator2.type = 'sine';
-            
-            oscillator3.frequency.setValueAtTime(1600, audioContext.currentTime);
-            oscillator3.type = 'sine';
-            
-            // Filter for metallic resonance
-            filter.type = 'bandpass';
-            filter.frequency.setValueAtTime(1000, audioContext.currentTime);
-            filter.Q.setValueAtTime(8, audioContext.currentTime);
-            
-            gainNode.gain.setValueAtTime(0.6, audioContext.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.0);
-            
-            oscillator1.start(audioContext.currentTime);
-            oscillator2.start(audioContext.currentTime);
-            oscillator3.start(audioContext.currentTime);
-            oscillator1.stop(audioContext.currentTime + 1.0);
-            oscillator2.stop(audioContext.currentTime + 1.0);
-            oscillator3.stop(audioContext.currentTime + 1.0);
-        } catch (error) {
-            console.log('Bell sound not available:', error);
-        }
-    }
-
-    playWarningSound() {
-        if (!this.soundEnabled) return;
-        
-        try {
-            // Create a warning sound (higher pitch beep)
-            const audioContext = this.audioContext || new (window.AudioContext || window.webkitAudioContext)();
-            
-            const oscillator1 = audioContext.createOscillator();
-            const oscillator2 = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            
-            oscillator1.connect(gainNode);
-            oscillator2.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            // Higher frequency for warning
-            oscillator1.frequency.setValueAtTime(1500, audioContext.currentTime);
-            oscillator1.type = 'sawtooth';
-            
-            oscillator2.frequency.setValueAtTime(2000, audioContext.currentTime);
-            oscillator2.type = 'sine';
-            
-            gainNode.gain.setValueAtTime(0.4, audioContext.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-            
-            oscillator1.start(audioContext.currentTime);
-            oscillator2.start(audioContext.currentTime);
-            oscillator1.stop(audioContext.currentTime + 0.2);
-            oscillator2.stop(audioContext.currentTime + 0.2);
-        } catch (error) {
-            console.log('Warning sound not available:', error);
-        }
-    }
-
-    setupEventListeners() {
-        // Exercise builder
-        this.addExerciseBtn.addEventListener('click', () => this.addExercise());
-        this.addRestBtn.addEventListener('click', () => this.addRest());
-        this.addGroupBtn.addEventListener('click', () => this.addGroup());
-        this.saveWorkoutBtn.addEventListener('click', () => this.saveWorkout());
-        this.startWorkoutBtn.addEventListener('click', () => this.startTimer());
-        this.loadWorkoutBtn.addEventListener('click', () => this.loadWorkout());
-        this.deleteWorkoutBtn.addEventListener('click', () => this.deleteWorkout());
-        
-        // History
-        this.clearHistoryBtn.addEventListener('click', () => this.clearHistory());
-        
-        // Fullscreen controls
-        this.fullscreenPauseBtn.addEventListener('click', () => this.pauseTimer());
-        this.fullscreenSkipBtn.addEventListener('click', () => this.skipExercise());
-        this.fullscreenStopBtn.addEventListener('click', () => this.stopTimer());
-    }
-
-
-
-    startTimer() {
-        if (!this.isRunning) {
-            this.isRunning = true;
-            this.isPaused = false;
-            this.startWorkoutBtn.disabled = true;
-            
-            // Check if there are exercises to run
-            if (this.exercises.length === 0) {
-                alert('Please add some exercises before starting the timer!');
-                this.isRunning = false;
-                this.startWorkoutBtn.disabled = false;
+        this.clearWorkoutBtn.addEventListener("click", () => {
+            if (!window.confirm("Clear the current workout plan?")) {
                 return;
             }
-            
-            if (this.currentTime === 0) {
-                this.currentExerciseIndex = 0;
-                this.currentGroupIndex = 0;
-                this.currentRepeat = 1;
-                this.currentTime = this.exercises[0].duration;
-                this.totalTime = this.calculateTotalTime();
-                this.showFullscreenTimer();
-                this.showGetReadyScreen();
-                return; // Don't start the main timer yet
+            this.workout.steps = [];
+            this.commitAndRender();
+        });
+
+        this.workoutNameInput.addEventListener("input", (event) => {
+            this.workout.name = this.sanitizeName(event.target.value, "My Workout", 80);
+            this.persistWorkout();
+        });
+
+        this.countdownInput.addEventListener("change", (event) => {
+            this.workout.countdown = clampInt(event.target.value, 0, 30, 5);
+            event.target.value = String(this.workout.countdown);
+            this.persistWorkout();
+        });
+
+        this.stepsContainer.addEventListener("click", (event) => this.handleStepAction(event));
+        this.stepsContainer.addEventListener("input", (event) => this.handleStepInput(event));
+        this.stepsContainer.addEventListener("change", (event) => this.handleStepChange(event));
+
+        this.startWorkoutBtn.addEventListener("click", () => this.startWorkout());
+
+        this.exportBtn.addEventListener("click", () => this.exportWorkout());
+        this.importBtn.addEventListener("click", () => this.importInput.click());
+        this.importInput.addEventListener("change", (event) => this.importWorkout(event));
+
+        this.pauseResumeBtn.addEventListener("click", () => this.togglePauseResume());
+        this.skipBtn.addEventListener("click", () => this.skipCurrent());
+        this.stopBtn.addEventListener("click", () => this.stopWorkout());
+
+        document.addEventListener("keydown", (event) => {
+            if (!this.runnerOverlay.classList.contains("active")) {
+                return;
             }
-            
-            this.interval = setInterval(() => this.updateTimer(), 1000);
-            this.updateDisplay();
-        }
-    }
 
-    pauseTimer() {
-        if (this.isRunning && !this.isPaused) {
-            this.isPaused = true;
-            clearInterval(this.interval);
-            this.fullscreenPauseBtn.textContent = 'Start';
-        } else if (this.isRunning && this.isPaused) {
-            this.isPaused = false;
-            this.fullscreenPauseBtn.textContent = 'Pause';
-            this.interval = setInterval(() => this.updateTimer(), 1000);
-        }
-    }
-
-    stopTimer() {
-        // Clear any running intervals
-        if (this.getReadyInterval) {
-            clearInterval(this.getReadyInterval);
-            this.getReadyInterval = null;
-        }
-        if (this.interval) {
-            clearInterval(this.interval);
-            this.interval = null;
-        }
-        
-        this.resetTimer();
-        this.hideFullscreenTimer();
-    }
-
-    skipExercise() {
-        if (this.isRunning) {
-            this.handleExerciseComplete();
-        }
-    }
-
-    showGetReadyScreen() {
-        this.fullscreenTime.textContent = '5';
-        this.fullscreenProgress.textContent = 'Get Ready...';
-        this.fullscreenTimer.className = 'fullscreen-timer active get-ready';
-        
-        // Disable Pause and Skip buttons during countdown
-        this.fullscreenPauseBtn.disabled = true;
-        this.fullscreenSkipBtn.disabled = true;
-        
-        let countdown = 5;
-        this.getReadyInterval = setInterval(() => {
-            countdown--;
-            this.fullscreenTime.textContent = countdown.toString();
-            
-            if (countdown <= 0) {
-                clearInterval(this.getReadyInterval);
-                this.fullscreenTimer.classList.remove('get-ready');
-                // Start the main timer after countdown
-                this.interval = setInterval(() => this.updateTimer(), 1000);
-                this.updateDisplay();
-                
-                // Enable Pause and Skip buttons once workout starts
-                this.fullscreenPauseBtn.disabled = false;
-                this.fullscreenSkipBtn.disabled = false;
+            if (event.code === "Space") {
+                event.preventDefault();
+                this.togglePauseResume();
             }
-        }, 1000);
+
+            if (event.code === "ArrowRight") {
+                event.preventDefault();
+                this.skipCurrent();
+            }
+
+            if (event.code === "Escape") {
+                event.preventDefault();
+                this.stopWorkout();
+            }
+        });
     }
 
-    showWellDoneScreen() {
-        this.fullscreenTime.textContent = 'Well Done!';
-        this.fullscreenProgress.textContent = 'Workout Complete!';
-        this.fullscreenTimer.className = 'fullscreen-timer active well-done';
-        
-        // Disable Pause and Skip buttons during completion screen
-        this.fullscreenPauseBtn.disabled = true;
-        this.fullscreenSkipBtn.disabled = true;
-        
-        // Hide fullscreen after 3 seconds
-        setTimeout(() => {
-            this.hideFullscreenTimer();
-            this.resetTimer();
-        }, 3000);
-    }
-
-    resetTimer() {
-        this.isRunning = false;
-        this.isPaused = false;
-        this.currentTime = 0;
-        this.currentExerciseIndex = 0;
-        this.currentGroupIndex = 0;
-        this.currentRepeat = 1;
-        
-        // Clear all intervals
-        if (this.getReadyInterval) {
-            clearInterval(this.getReadyInterval);
-            this.getReadyInterval = null;
-        }
-        if (this.interval) {
-            clearInterval(this.interval);
-            this.interval = null;
-        }
-        
-        this.startWorkoutBtn.disabled = false;
-        
-        this.updateDisplay();
-    }
-
-    updateTimer() {
-        // Ensure currentTime is a valid number
-        if (typeof this.currentTime !== 'number' || isNaN(this.currentTime)) {
-            this.currentTime = 0;
-        }
-        
-        this.currentTime--;
-        
-        // Play tick sound every second
-        this.playTickSound();
-        
-        // Play warning sound at 10 seconds remaining
-        if (this.currentTime === 10) {
-            this.playWarningSound();
-        }
-        
-        if (this.currentTime <= 0) {
-            this.handleExerciseComplete();
-        }
-        
-        this.updateDisplay();
-    }
-
-    handleExerciseComplete() {
-        // Play bell sound when exercise is finished
-        this.playBellSound();
-        
-        this.currentExerciseIndex++;
-        
-        if (this.currentExerciseIndex >= this.exercises.length) {
-            // Workout complete
-            this.completeWorkout();
+    handleStepAction(event) {
+        const button = event.target.closest("[data-action]");
+        if (!button) {
             return;
-        } else {
-            if (this.exercises[this.currentExerciseIndex]) {
-                this.currentTime = this.exercises[this.currentExerciseIndex].duration;
-            } else {
-                this.completeWorkout();
+        }
+
+        const action = button.dataset.action;
+        const stepId = button.dataset.stepId;
+        const groupId = button.dataset.groupId;
+        const itemId = button.dataset.itemId;
+
+        if (action === "step-delete") {
+            this.deleteTopLevelStep(stepId);
+            return;
+        }
+
+        if (action === "step-duplicate") {
+            this.duplicateTopLevelStep(stepId);
+            return;
+        }
+
+        if (action === "step-up" || action === "step-down") {
+            this.moveTopLevelStep(stepId, action === "step-up" ? -1 : 1);
+            return;
+        }
+
+        if (action === "group-add-item") {
+            const group = this.findGroup(groupId);
+            if (!group) {
                 return;
             }
+            group.items.push(createGroupItem());
+            this.commitAndRender();
+            return;
         }
-        
-        this.updateDisplay();
-    }
 
-    completeWorkout() {
-        clearInterval(this.interval);
-        this.isRunning = false;
-        this.isPaused = false;
-        
-        this.startWorkoutBtn.disabled = false;
-        
-        // Add to history
-        this.addToHistory();
-        
-        // Show "Well Done!" screen
-        this.showWellDoneScreen();
-    }
-
-    calculateTotalTime() {
-        let total = 0;
-        for (let exercise of this.exercises) {
-            total += exercise.duration;
-        }
-        return total;
-    }
-
-    getProgressWithNextExercise() {
-        const currentExercise = this.exercises[this.currentExerciseIndex];
-        const nextExerciseIndex = this.currentExerciseIndex + 1;
-        
-        let progress = `Exercise ${this.currentExerciseIndex + 1} of ${this.exercises.length}`;
-        
-        // Add current exercise info
-        if (currentExercise) {
-            const currentMinutes = Math.floor(currentExercise.duration / 60);
-            const currentSeconds = currentExercise.duration % 60;
-            const currentTimeString = `${currentMinutes.toString().padStart(2, '0')}:${currentSeconds.toString().padStart(2, '0')}`;
-            
-            progress += ` • ${currentExercise.name} (${currentTimeString})`;
-        }
-        
-        // Add next exercise info if available
-        if (nextExerciseIndex < this.exercises.length) {
-            const nextExercise = this.exercises[nextExerciseIndex];
-            if (nextExercise) {
-                const nextMinutes = Math.floor(nextExercise.duration / 60);
-                const nextSeconds = nextExercise.duration % 60;
-                const nextTimeString = `${nextMinutes.toString().padStart(2, '0')}:${nextSeconds.toString().padStart(2, '0')}`;
-                
-                progress += `\nNext: ${nextExercise.name} (${nextTimeString})`;
+        if (action === "group-add-rest") {
+            const group = this.findGroup(groupId);
+            if (!group) {
+                return;
             }
-        } else {
-            progress += '\nNext: Workout Complete!';
+            group.items.push(createGroupItem({ name: "Rest", duration: 20, repeats: 1 }));
+            this.commitAndRender();
+            return;
         }
-        
-        return progress;
+
+        if (action === "group-item-delete") {
+            this.deleteGroupItem(groupId, itemId);
+            return;
+        }
+
+        if (action === "group-item-up" || action === "group-item-down") {
+            this.moveGroupItem(groupId, itemId, action === "group-item-up" ? -1 : 1);
+        }
     }
 
-    updateDisplay() {
-        // Ensure currentTime is a valid number
-        const time = Math.max(0, this.currentTime || 0);
-        const minutes = Math.floor(time / 60);
-        const seconds = time % 60;
-        const timeString = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        
-        this.fullscreenTime.textContent = timeString;
-        
-        if (this.isRunning && this.exercises.length > 0 && this.currentExerciseIndex < this.exercises.length) {
-            const currentExercise = this.exercises[this.currentExerciseIndex];
-            if (currentExercise) {
-                // Update fullscreen background based on exercise type and time
-                this.updateFullscreenBackground(currentExercise, time);
-                
-                // Update progress with next exercise info
-                const progress = this.getProgressWithNextExercise();
-                this.fullscreenProgress.textContent = progress;
+    handleStepInput(event) {
+        const target = event.target;
+        const bind = target.dataset.bind;
+        if (!bind) {
+            return;
+        }
+
+        const isTextField = bind === "step-name" || bind === "group-name" || bind === "group-item-name";
+        if (!isTextField) {
+            return;
+        }
+
+        this.applyBinding(target, { commit: false });
+        this.persistWorkout();
+    }
+
+    handleStepChange(event) {
+        const target = event.target;
+        const bind = target.dataset.bind;
+        if (!bind) {
+            return;
+        }
+
+        this.applyBinding(target, { commit: true });
+        this.commitAndRender();
+    }
+
+    applyBinding(target, options = { commit: true }) {
+        const bind = target.dataset.bind;
+        const stepId = target.dataset.stepId;
+        const groupId = target.dataset.groupId;
+        const itemId = target.dataset.itemId;
+
+        if (bind === "step-name") {
+            const step = this.findStep(stepId);
+            if (step && step.type === "exercise") {
+                step.name = this.sanitizeName(target.value, "Exercise", 60);
             }
+            return;
         }
-    }
 
-    updateFullscreenBackground(exercise, timeLeft) {
-        this.fullscreenTimer.className = 'fullscreen-timer active';
-        
-        if (exercise.type === 'rest') {
-            this.fullscreenTimer.classList.add('rest');
-            this.fullscreenTimer.classList.remove('workout', 'warning');
-        } else {
-            this.fullscreenTimer.classList.add('workout');
-            this.fullscreenTimer.classList.remove('rest');
-            
-            // Last 10 seconds warning
-            if (timeLeft <= 10) {
-                this.fullscreenTimer.classList.add('warning');
-            } else {
-                this.fullscreenTimer.classList.remove('warning');
+        if (bind === "step-duration") {
+            const step = this.findStep(stepId);
+            if (step && step.type === "exercise") {
+                step.duration = clampInt(target.value, 1, 3600, step.duration);
+                if (options.commit) {
+                    target.value = String(step.duration);
+                }
             }
+            return;
         }
-    }
 
-    showFullscreenTimer() {
-        this.isFullscreen = true;
-        this.fullscreenTimer.classList.add('active');
-        document.body.style.overflow = 'hidden';
-    }
+        if (bind === "step-repeats") {
+            const step = this.findStep(stepId);
+            if (step && step.type === "exercise") {
+                step.repeats = clampInt(target.value, 1, 20, step.repeats);
+                if (options.commit) {
+                    target.value = String(step.repeats);
+                }
+            }
+            return;
+        }
 
-    hideFullscreenTimer() {
-        this.isFullscreen = false;
-        this.fullscreenTimer.classList.remove('active');
-        document.body.style.overflow = '';
-    }
+        if (bind === "group-name") {
+            const group = this.findGroup(groupId);
+            if (group) {
+                group.name = this.sanitizeName(target.value, "Group", 60);
+            }
+            return;
+        }
 
-    addExercise() {
-        const name = prompt('Enter exercise name:');
-        if (!name) return;
-        
-        const duration = parseInt(prompt('Enter duration in minutes:'));
-        if (!duration || duration <= 0) return;
-        
-        this.exercises.push({
-            type: 'exercise',
-            name: name,
-            duration: duration * 60
-        });
-        
-        this.renderExerciseList();
-        this.saveToLocalStorage();
-    }
+        if (bind === "group-repeats") {
+            const group = this.findGroup(groupId);
+            if (group) {
+                group.repeats = clampInt(target.value, 1, 20, group.repeats);
+                if (options.commit) {
+                    target.value = String(group.repeats);
+                }
+            }
+            return;
+        }
 
-    addRest() {
-        const duration = parseInt(prompt('Enter rest duration in minutes:'));
-        if (!duration || duration <= 0) return;
-        
-        this.exercises.push({
-            type: 'rest',
-            name: 'Rest',
-            duration: duration * 60
-        });
-        
-        this.renderExerciseList();
-        this.saveToLocalStorage();
-    }
+        if (bind === "group-item-name") {
+            const item = this.findGroupItem(groupId, itemId);
+            if (item) {
+                item.name = this.sanitizeName(target.value, "Exercise", 60);
+            }
+            return;
+        }
 
-    addGroup() {
-        const groupName = prompt('Enter group name:');
-        if (!groupName) return;
-        
-        const repeats = parseInt(prompt('Enter number of repeats:'));
-        if (!repeats || repeats <= 0) return;
-        
-        const groupExercises = [];
-        let addMore = true;
-        
-        while (addMore) {
-            const exerciseName = prompt('Enter exercise name (or cancel to finish):');
-            if (!exerciseName) break;
-            
-            const duration = parseInt(prompt('Enter duration in minutes:'));
-            if (!duration || duration <= 0) continue;
-            
-            groupExercises.push({
-                type: 'exercise',
-                name: exerciseName,
-                duration: duration * 60
-            });
-            
-            const addRest = confirm('Add rest after this exercise?');
-            if (addRest) {
-                const restDuration = parseInt(prompt('Enter rest duration in minutes:'));
-                if (restDuration && restDuration > 0) {
-                    groupExercises.push({
-                        type: 'rest',
-                        name: 'Rest',
-                        duration: restDuration * 60
-                    });
+        if (bind === "group-item-duration") {
+            const item = this.findGroupItem(groupId, itemId);
+            if (item) {
+                item.duration = clampInt(target.value, 1, 3600, item.duration);
+                if (options.commit) {
+                    target.value = String(item.duration);
+                }
+            }
+            return;
+        }
+
+        if (bind === "group-item-repeats") {
+            const item = this.findGroupItem(groupId, itemId);
+            if (item) {
+                item.repeats = clampInt(target.value, 1, 20, item.repeats);
+                if (options.commit) {
+                    target.value = String(item.repeats);
                 }
             }
         }
-        
-        if (groupExercises.length > 0) {
-            // Add the group exercises directly to the main exercise list
-            for (let repeat = 0; repeat < repeats; repeat++) {
-                groupExercises.forEach(exercise => {
-                    this.exercises.push({
-                        ...exercise,
-                        groupName: groupName,
-                        repeatNumber: repeat + 1,
-                        totalRepeats: repeats
-                    });
-                });
-            }
-            
-            this.renderExerciseList();
-            this.saveToLocalStorage();
-        }
     }
 
-    renderExerciseList() {
-        if (this.exercises.length === 0) {
-            this.exerciseList.innerHTML = '<div class="empty-history">No exercises added yet. Add some exercises to get started!</div>';
+    findStep(stepId) {
+        return this.workout.steps.find((step) => step.id === stepId);
+    }
+
+    findStepIndex(stepId) {
+        return this.workout.steps.findIndex((step) => step.id === stepId);
+    }
+
+    findGroup(groupId) {
+        return this.workout.steps.find((step) => step.type === "group" && step.id === groupId);
+    }
+
+    findGroupItem(groupId, itemId) {
+        const group = this.findGroup(groupId);
+        if (!group) {
+            return null;
+        }
+        return group.items.find((item) => item.id === itemId) || null;
+    }
+
+    moveTopLevelStep(stepId, direction) {
+        const index = this.findStepIndex(stepId);
+        if (index === -1) {
             return;
         }
-        
-        let html = '';
-        let currentGroup = null;
-        
-        for (let i = 0; i < this.exercises.length; i++) {
-            const exercise = this.exercises[i];
-            
-            // Check if this is a new group
-            if (exercise.groupName && exercise.groupName !== currentGroup) {
-                currentGroup = exercise.groupName;
-                html += `
-                    <div class="exercise-item group group-header">
-                        <div class="exercise-info">
-                            <div class="exercise-name">${exercise.groupName} (${exercise.totalRepeats} repeats)</div>
-                            <div class="exercise-duration">Group ${exercise.repeatNumber}/${exercise.totalRepeats}</div>
-                        </div>
-                    </div>
-                `;
-            }
-            
-            // Show group indicator if this exercise is part of a group
-            const groupIndicator = exercise.groupName ? 
-                `<div class="exercise-group-indicator">${exercise.groupName} - Round ${exercise.repeatNumber}</div>` : '';
-            
-            html += `
-                <div class="exercise-item ${exercise.type} ${exercise.groupName ? 'group-item' : ''}">
-                    <div class="exercise-info">
-                        <div class="exercise-name">${exercise.name} ${groupIndicator}</div>
-                        <div class="exercise-duration">${this.formatDuration(exercise.duration)}</div>
-                    </div>
-                    <div class="exercise-controls">
-                        <button class="edit-btn" onclick="timer.editExercise(${i})">Edit</button>
-                        <button class="delete-btn" onclick="timer.deleteExercise(${i})">Delete</button>
-                        ${i > 0 ? `<button class="move-up-btn" onclick="timer.moveExercise(${i}, -1)">↑</button>` : ''}
-                        ${i < this.exercises.length - 1 ? `<button class="move-down-btn" onclick="timer.moveExercise(${i}, 1)">↓</button>` : ''}
-                    </div>
+        const destination = index + direction;
+        if (destination < 0 || destination >= this.workout.steps.length) {
+            return;
+        }
+        const [step] = this.workout.steps.splice(index, 1);
+        this.workout.steps.splice(destination, 0, step);
+        this.commitAndRender();
+    }
+
+    deleteTopLevelStep(stepId) {
+        const index = this.findStepIndex(stepId);
+        if (index === -1) {
+            return;
+        }
+        this.workout.steps.splice(index, 1);
+        this.commitAndRender();
+    }
+
+    duplicateTopLevelStep(stepId) {
+        const index = this.findStepIndex(stepId);
+        if (index === -1) {
+            return;
+        }
+        const source = this.workout.steps[index];
+        let duplicated;
+
+        if (source.type === "group") {
+            duplicated = {
+                id: uid("group"),
+                type: "group",
+                name: source.name,
+                repeats: source.repeats,
+                items: source.items.map((item) => ({
+                    id: uid("item"),
+                    name: item.name,
+                    duration: item.duration,
+                    repeats: item.repeats
+                }))
+            };
+        } else {
+            duplicated = {
+                id: uid("step"),
+                type: "exercise",
+                name: source.name,
+                duration: source.duration,
+                repeats: source.repeats
+            };
+        }
+
+        this.workout.steps.splice(index + 1, 0, duplicated);
+        this.commitAndRender();
+    }
+
+    deleteGroupItem(groupId, itemId) {
+        const group = this.findGroup(groupId);
+        if (!group) {
+            return;
+        }
+
+        if (group.items.length <= 1) {
+            this.toast("A group needs at least one exercise.", "error");
+            return;
+        }
+
+        group.items = group.items.filter((item) => item.id !== itemId);
+        this.commitAndRender();
+    }
+
+    moveGroupItem(groupId, itemId, direction) {
+        const group = this.findGroup(groupId);
+        if (!group) {
+            return;
+        }
+
+        const index = group.items.findIndex((item) => item.id === itemId);
+        if (index === -1) {
+            return;
+        }
+
+        const destination = index + direction;
+        if (destination < 0 || destination >= group.items.length) {
+            return;
+        }
+
+        const [item] = group.items.splice(index, 1);
+        group.items.splice(destination, 0, item);
+        this.commitAndRender();
+    }
+
+    commitAndRender() {
+        this.persistWorkout();
+        this.render();
+    }
+
+    render() {
+        this.workoutNameInput.value = this.workout.name;
+        this.countdownInput.value = String(this.workout.countdown);
+
+        if (this.workout.steps.length === 0) {
+            this.stepsContainer.innerHTML = `
+                <div class="empty-state">
+                    <p>No exercises yet. Add a single exercise or create a repeatable group.</p>
                 </div>
             `;
+        } else {
+            this.stepsContainer.innerHTML = this.workout.steps.map((step) => {
+                if (step.type === "group") {
+                    return this.renderGroup(step);
+                }
+                return this.renderExercise(step);
+            }).join("");
         }
-        
-        this.exerciseList.innerHTML = html;
+
+        this.renderSummary();
     }
 
-    editExercise(index) {
-        const exercise = this.exercises[index];
-        
-        const newName = prompt('Enter new name:', exercise.name);
-        if (!newName) return;
-        
-        const newDuration = parseInt(prompt('Enter new duration in minutes:', Math.floor(exercise.duration / 60)));
-        if (!newDuration || newDuration <= 0) return;
-        
-        exercise.name = newName;
-        exercise.duration = newDuration * 60;
-        
-        this.renderExerciseList();
-        this.saveToLocalStorage();
+    renderSummary() {
+        const sequence = this.expandWorkout();
+        const totalSeconds = sequence.reduce((accumulator, item) => accumulator + item.duration, 0);
+        const groupCount = this.workout.steps.filter((step) => step.type === "group").length;
+        const singleCount = this.workout.steps.filter((step) => step.type === "exercise").length;
+
+        const pills = [
+            `${this.workout.steps.length} blocks`,
+            `${sequence.length} intervals`,
+            `${this.formatClock(totalSeconds)} total`,
+            `${singleCount} single exercises`,
+            `${groupCount} groups`
+        ];
+
+        this.planSummary.innerHTML = pills.map((item) => `<span class="stat-pill">${escapeHtml(item)}</span>`).join("");
+        this.startWorkoutBtn.disabled = sequence.length === 0;
     }
 
-    deleteExercise(index) {
-        if (confirm('Are you sure you want to delete this exercise?')) {
-            this.exercises.splice(index, 1);
-            this.renderExerciseList();
-            this.saveToLocalStorage();
+    renderExercise(step) {
+        const estimated = this.formatClock(step.duration * step.repeats);
+        return `
+            <article class="step-card exercise" data-step-id="${escapeHtml(step.id)}">
+                <div class="step-head">
+                    <span class="step-tag">Exercise</span>
+                    <div class="icon-actions">
+                        <button class="icon-btn" data-action="step-up" data-step-id="${escapeHtml(step.id)}" type="button">Up</button>
+                        <button class="icon-btn" data-action="step-down" data-step-id="${escapeHtml(step.id)}" type="button">Down</button>
+                        <button class="icon-btn" data-action="step-duplicate" data-step-id="${escapeHtml(step.id)}" type="button">Duplicate</button>
+                        <button class="icon-btn" data-action="step-delete" data-step-id="${escapeHtml(step.id)}" type="button">Delete</button>
+                    </div>
+                </div>
+
+                <div class="field-grid">
+                    <label class="field">
+                        <span>Name</span>
+                        <input
+                            data-bind="step-name"
+                            data-step-id="${escapeHtml(step.id)}"
+                            type="text"
+                            maxlength="60"
+                            value="${escapeHtml(step.name)}"
+                        >
+                    </label>
+                    <label class="field">
+                        <span>Seconds</span>
+                        <input
+                            data-bind="step-duration"
+                            data-step-id="${escapeHtml(step.id)}"
+                            type="number"
+                            min="1"
+                            max="3600"
+                            step="1"
+                            value="${escapeHtml(step.duration)}"
+                        >
+                    </label>
+                    <label class="field">
+                        <span>Repeats</span>
+                        <input
+                            data-bind="step-repeats"
+                            data-step-id="${escapeHtml(step.id)}"
+                            type="number"
+                            min="1"
+                            max="20"
+                            step="1"
+                            value="${escapeHtml(step.repeats)}"
+                        >
+                    </label>
+                </div>
+
+                <div class="helper-row">Estimated block time: ${escapeHtml(estimated)}</div>
+            </article>
+        `;
+    }
+
+    renderGroup(group) {
+        const groupDuration = group.items.reduce((accumulator, item) => {
+            return accumulator + (item.duration * item.repeats);
+        }, 0) * group.repeats;
+
+        const itemsMarkup = group.items.map((item) => `
+            <div class="group-item" data-group-id="${escapeHtml(group.id)}" data-item-id="${escapeHtml(item.id)}">
+                <label class="field">
+                    <span>Name</span>
+                    <input
+                        data-bind="group-item-name"
+                        data-group-id="${escapeHtml(group.id)}"
+                        data-item-id="${escapeHtml(item.id)}"
+                        type="text"
+                        maxlength="60"
+                        value="${escapeHtml(item.name)}"
+                    >
+                </label>
+                <label class="field">
+                    <span>Seconds</span>
+                    <input
+                        data-bind="group-item-duration"
+                        data-group-id="${escapeHtml(group.id)}"
+                        data-item-id="${escapeHtml(item.id)}"
+                        type="number"
+                        min="1"
+                        max="3600"
+                        step="1"
+                        value="${escapeHtml(item.duration)}"
+                    >
+                </label>
+                <label class="field">
+                    <span>Repeats</span>
+                    <input
+                        data-bind="group-item-repeats"
+                        data-group-id="${escapeHtml(group.id)}"
+                        data-item-id="${escapeHtml(item.id)}"
+                        type="number"
+                        min="1"
+                        max="20"
+                        step="1"
+                        value="${escapeHtml(item.repeats)}"
+                    >
+                </label>
+                <div class="group-tools">
+                    <button class="small-btn" data-action="group-item-up" data-group-id="${escapeHtml(group.id)}" data-item-id="${escapeHtml(item.id)}" type="button">Up</button>
+                    <button class="small-btn" data-action="group-item-down" data-group-id="${escapeHtml(group.id)}" data-item-id="${escapeHtml(item.id)}" type="button">Down</button>
+                    <button class="small-btn danger" data-action="group-item-delete" data-group-id="${escapeHtml(group.id)}" data-item-id="${escapeHtml(item.id)}" type="button">Delete</button>
+                </div>
+            </div>
+        `).join("");
+
+        return `
+            <article class="step-card group" data-step-id="${escapeHtml(group.id)}">
+                <div class="step-head">
+                    <span class="step-tag">Group</span>
+                    <div class="icon-actions">
+                        <button class="icon-btn" data-action="step-up" data-step-id="${escapeHtml(group.id)}" type="button">Up</button>
+                        <button class="icon-btn" data-action="step-down" data-step-id="${escapeHtml(group.id)}" type="button">Down</button>
+                        <button class="icon-btn" data-action="step-duplicate" data-step-id="${escapeHtml(group.id)}" type="button">Duplicate</button>
+                        <button class="icon-btn" data-action="step-delete" data-step-id="${escapeHtml(group.id)}" type="button">Delete</button>
+                    </div>
+                </div>
+
+                <div class="field-grid">
+                    <label class="field">
+                        <span>Group Name</span>
+                        <input
+                            data-bind="group-name"
+                            data-group-id="${escapeHtml(group.id)}"
+                            type="text"
+                            maxlength="60"
+                            value="${escapeHtml(group.name)}"
+                        >
+                    </label>
+                    <label class="field">
+                        <span>Group Repeats</span>
+                        <input
+                            data-bind="group-repeats"
+                            data-group-id="${escapeHtml(group.id)}"
+                            type="number"
+                            min="1"
+                            max="20"
+                            step="1"
+                            value="${escapeHtml(group.repeats)}"
+                        >
+                    </label>
+                    <div class="helper-row">Items: ${escapeHtml(group.items.length)}<br>Total: ${escapeHtml(this.formatClock(groupDuration))}</div>
+                </div>
+
+                <div class="group-items">${itemsMarkup}</div>
+
+                <div class="group-footer">
+                    <button class="btn btn-secondary" data-action="group-add-item" data-group-id="${escapeHtml(group.id)}" type="button">Add Exercise</button>
+                    <button class="btn btn-secondary" data-action="group-add-rest" data-group-id="${escapeHtml(group.id)}" type="button">Add Rest</button>
+                </div>
+            </article>
+        `;
+    }
+
+    expandWorkout() {
+        const sequence = [];
+
+        for (const step of this.workout.steps) {
+            if (step.type === "exercise") {
+                for (let repeat = 1; repeat <= step.repeats; repeat += 1) {
+                    sequence.push({
+                        name: this.sanitizeName(step.name, "Exercise", 60),
+                        duration: clampInt(step.duration, 1, 3600, 30),
+                        detail: step.repeats > 1 ? `Rep ${repeat}/${step.repeats}` : "Single set"
+                    });
+                }
+                continue;
+            }
+
+            if (step.type === "group") {
+                for (let round = 1; round <= step.repeats; round += 1) {
+                    for (const item of step.items) {
+                        for (let itemRepeat = 1; itemRepeat <= item.repeats; itemRepeat += 1) {
+                            sequence.push({
+                                name: this.sanitizeName(item.name, "Exercise", 60),
+                                duration: clampInt(item.duration, 1, 3600, 30),
+                                detail: [
+                                    `${this.sanitizeName(step.name, "Group", 60)} Round ${round}/${step.repeats}`,
+                                    item.repeats > 1 ? `Rep ${itemRepeat}/${item.repeats}` : ""
+                                ].filter(Boolean).join(" | ")
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        return sequence;
+    }
+
+    startWorkout() {
+        if (this.runner.status !== "idle") {
+            return;
+        }
+
+        const sequence = this.expandWorkout();
+        if (sequence.length === 0) {
+            this.toast("Add at least one exercise before starting.", "error");
+            return;
+        }
+
+        const totalDuration = sequence.reduce((total, item) => total + item.duration, 0);
+
+        this.runner.sequence = sequence;
+        this.runner.index = 0;
+        this.runner.stepRemaining = sequence[0].duration;
+        this.runner.totalDuration = totalDuration;
+        this.runner.totalRemaining = totalDuration;
+        this.runner.countdownRemaining = clampInt(this.workout.countdown, 0, 30, 5);
+
+        this.showRunner();
+
+        if (this.runner.countdownRemaining > 0) {
+            this.setRunnerStatus("countdown");
+            this.startCountdownTimer();
+        } else {
+            this.startRunTimer();
+            this.setRunnerStatus("running");
+        }
+
+        this.updateRunnerUI();
+    }
+
+    showRunner() {
+        this.runnerOverlay.classList.add("active");
+        this.runnerOverlay.setAttribute("aria-hidden", "false");
+        document.body.classList.add("runner-open");
+    }
+
+    hideRunner() {
+        this.runnerOverlay.classList.remove("active");
+        this.runnerOverlay.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("runner-open");
+    }
+
+    setRunnerStatus(status) {
+        this.runner.status = status;
+        this.runnerOverlay.dataset.mode = status;
+        this.updateRunnerControls();
+    }
+
+    clearRunnerTimer() {
+        if (this.runner.timerId) {
+            window.clearInterval(this.runner.timerId);
+            this.runner.timerId = null;
         }
     }
 
-    moveExercise(index, direction) {
-        const newIndex = index + direction;
-        if (newIndex >= 0 && newIndex < this.exercises.length) {
-            const temp = this.exercises[index];
-            this.exercises[index] = this.exercises[newIndex];
-            this.exercises[newIndex] = temp;
-            this.renderExerciseList();
-            this.saveToLocalStorage();
+    startCountdownTimer() {
+        this.clearRunnerTimer();
+        this.runner.timerId = window.setInterval(() => {
+            if (this.runner.status !== "countdown") {
+                return;
+            }
+
+            this.runner.countdownRemaining -= 1;
+            if (this.runner.countdownRemaining <= 0) {
+                this.clearRunnerTimer();
+                this.setRunnerStatus("running");
+                this.startRunTimer();
+                this.updateRunnerUI();
+                return;
+            }
+
+            this.updateRunnerUI();
+        }, 1000);
+    }
+
+    startRunTimer() {
+        this.clearRunnerTimer();
+        this.runner.timerId = window.setInterval(() => {
+            if (this.runner.status !== "running") {
+                return;
+            }
+
+            this.runner.stepRemaining = Math.max(0, this.runner.stepRemaining - 1);
+            this.runner.totalRemaining = Math.max(0, this.runner.totalRemaining - 1);
+
+            if (this.runner.stepRemaining <= 0) {
+                this.advanceStep(false);
+                return;
+            }
+
+            this.updateRunnerUI();
+        }, 1000);
+    }
+
+    advanceStep(skipped) {
+        if (skipped) {
+            this.runner.totalRemaining = Math.max(0, this.runner.totalRemaining - this.runner.stepRemaining);
+        }
+
+        this.runner.index += 1;
+
+        if (this.runner.index >= this.runner.sequence.length) {
+            this.finishWorkout();
+            return;
+        }
+
+        this.runner.stepRemaining = this.runner.sequence[this.runner.index].duration;
+
+        if (this.runner.status === "paused") {
+            this.updateRunnerUI();
+            return;
+        }
+
+        this.setRunnerStatus("running");
+        this.startRunTimer();
+        this.updateRunnerUI();
+    }
+
+    togglePauseResume() {
+        if (this.runner.status === "countdown") {
+            this.clearRunnerTimer();
+            this.setRunnerStatus("countdown-paused");
+            this.updateRunnerUI();
+            return;
+        }
+
+        if (this.runner.status === "countdown-paused") {
+            this.setRunnerStatus("countdown");
+            this.startCountdownTimer();
+            this.updateRunnerUI();
+            return;
+        }
+
+        if (this.runner.status === "running") {
+            this.clearRunnerTimer();
+            this.setRunnerStatus("paused");
+            this.updateRunnerUI();
+            return;
+        }
+
+        if (this.runner.status === "paused") {
+            this.setRunnerStatus("running");
+            this.startRunTimer();
+            this.updateRunnerUI();
         }
     }
 
-    saveWorkout() {
-        const name = prompt('Enter workout name:');
-        if (!name) return;
-        
-        this.savedWorkouts[name] = {
-            exercises: JSON.parse(JSON.stringify(this.exercises)),
-            date: new Date().toISOString()
+    skipCurrent() {
+        if (this.runner.status === "finished" || this.runner.status === "idle") {
+            return;
+        }
+
+        if (this.runner.status === "countdown" || this.runner.status === "countdown-paused") {
+            this.clearRunnerTimer();
+            this.runner.countdownRemaining = 0;
+            this.setRunnerStatus("running");
+            this.startRunTimer();
+            this.updateRunnerUI();
+            return;
+        }
+
+        this.advanceStep(true);
+    }
+
+    stopWorkout() {
+        this.clearRunnerTimer();
+        this.hideRunner();
+        this.runner = this.createRunnerState();
+        this.runnerOverlay.dataset.mode = "idle";
+    }
+
+    finishWorkout() {
+        this.clearRunnerTimer();
+        this.runner.stepRemaining = 0;
+        this.runner.totalRemaining = 0;
+        this.setRunnerStatus("finished");
+        this.updateRunnerUI();
+        this.toast("Workout complete.", "success");
+    }
+
+    updateRunnerControls() {
+        const status = this.runner.status;
+
+        if (status === "running" || status === "countdown") {
+            this.pauseResumeBtn.textContent = "Pause";
+            this.pauseResumeBtn.disabled = false;
+        } else if (status === "paused" || status === "countdown-paused") {
+            this.pauseResumeBtn.textContent = "Resume";
+            this.pauseResumeBtn.disabled = false;
+        } else if (status === "finished") {
+            this.pauseResumeBtn.textContent = "Pause";
+            this.pauseResumeBtn.disabled = true;
+        } else {
+            this.pauseResumeBtn.textContent = "Pause";
+            this.pauseResumeBtn.disabled = true;
+        }
+
+        this.skipBtn.disabled = status === "finished" || status === "idle";
+        this.skipBtn.textContent = (status === "countdown" || status === "countdown-paused") ? "Skip Countdown" : "Skip";
+        this.stopBtn.textContent = status === "finished" ? "Close" : "Stop";
+    }
+
+    updateRunnerUI() {
+        const status = this.runner.status;
+
+        if (status === "idle") {
+            return;
+        }
+
+        let stage = "";
+        let exerciseName = "";
+        let exerciseMeta = "";
+        let timerLabel = "00:00";
+        let stepDone = 0;
+        let stepTotal = 0;
+
+        if (status === "countdown" || status === "countdown-paused") {
+            stage = status === "countdown" ? "Get Ready" : "Countdown Paused";
+            exerciseName = this.workout.name;
+            exerciseMeta = `${this.runner.sequence.length} intervals | ${this.formatClock(this.runner.totalDuration)} total`;
+            timerLabel = String(this.runner.countdownRemaining);
+            stepDone = 0;
+            stepTotal = 1;
+        } else if (status === "finished") {
+            stage = "Workout Complete";
+            exerciseName = "Great work";
+            exerciseMeta = `${this.runner.sequence.length} intervals completed`;
+            timerLabel = "00:00";
+            stepDone = 1;
+            stepTotal = 1;
+        } else {
+            const current = this.runner.sequence[this.runner.index];
+            const safeCurrent = current || { name: "Exercise", detail: "", duration: 1 };
+
+            stage = status === "paused" ? "Paused" : "Now";
+            exerciseName = safeCurrent.name;
+            exerciseMeta = `${safeCurrent.detail} | Interval ${this.runner.index + 1}/${this.runner.sequence.length}`;
+            timerLabel = this.formatClock(this.runner.stepRemaining);
+            stepDone = safeCurrent.duration - this.runner.stepRemaining;
+            stepTotal = safeCurrent.duration;
+        }
+
+        const totalDone = this.runner.totalDuration - this.runner.totalRemaining;
+
+        this.runnerStage.textContent = stage;
+        this.runnerExerciseName.textContent = exerciseName;
+        this.runnerExerciseMeta.textContent = exerciseMeta;
+        this.runnerTimer.textContent = timerLabel;
+
+        this.stepProgressText.textContent = `${this.formatClock(stepDone)} / ${this.formatClock(stepTotal)}`;
+        this.totalProgressText.textContent = `${this.formatClock(totalDone)} / ${this.formatClock(this.runner.totalDuration)}`;
+
+        this.stepProgressBar.style.width = `${this.percent(stepDone, stepTotal)}%`;
+        this.totalProgressBar.style.width = `${this.percent(totalDone, this.runner.totalDuration)}%`;
+
+        this.updateRunnerControls();
+    }
+
+    percent(done, total) {
+        if (total <= 0) {
+            return 0;
+        }
+        return Math.min(100, Math.max(0, (done / total) * 100));
+    }
+
+    formatClock(totalSeconds) {
+        const seconds = Math.max(0, Math.floor(totalSeconds || 0));
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const remainder = seconds % 60;
+
+        const pad = (value) => String(value).padStart(2, "0");
+
+        if (hours > 0) {
+            return `${pad(hours)}:${pad(minutes)}:${pad(remainder)}`;
+        }
+
+        return `${pad(minutes)}:${pad(remainder)}`;
+    }
+
+    sanitizeName(value, fallback, maxLength) {
+        const text = typeof value === "string" ? value.trim() : "";
+        if (!text) {
+            return fallback;
+        }
+        return text.slice(0, maxLength);
+    }
+
+    sanitizeWorkout(rawInput) {
+        if (!rawInput || typeof rawInput !== "object") {
+            return null;
+        }
+
+        const raw = rawInput.workout && typeof rawInput.workout === "object" ? rawInput.workout : rawInput;
+
+        const workout = {
+            name: this.sanitizeName(raw.name, "My Workout", 80),
+            countdown: clampInt(raw.countdown, 0, 30, 5),
+            steps: []
         };
-        
-        this.saveToLocalStorage();
-        this.updateWorkoutSelector();
-        alert('Workout saved successfully!');
+
+        if (!Array.isArray(raw.steps)) {
+            return workout;
+        }
+
+        for (const rawStep of raw.steps) {
+            if (!rawStep || typeof rawStep !== "object") {
+                continue;
+            }
+
+            if (rawStep.type === "group") {
+                const group = {
+                    id: uid("group"),
+                    type: "group",
+                    name: this.sanitizeName(rawStep.name, "Group", 60),
+                    repeats: clampInt(rawStep.repeats, 1, 20, 2),
+                    items: []
+                };
+
+                if (Array.isArray(rawStep.items)) {
+                    for (const rawItem of rawStep.items) {
+                        if (!rawItem || typeof rawItem !== "object") {
+                            continue;
+                        }
+                        group.items.push({
+                            id: uid("item"),
+                            name: this.sanitizeName(rawItem.name, "Exercise", 60),
+                            duration: clampInt(rawItem.duration, 1, 3600, 30),
+                            repeats: clampInt(rawItem.repeats, 1, 20, 1)
+                        });
+                    }
+                }
+
+                if (group.items.length === 0) {
+                    group.items.push(createGroupItem());
+                }
+
+                workout.steps.push(group);
+                continue;
+            }
+
+            workout.steps.push({
+                id: uid("step"),
+                type: "exercise",
+                name: this.sanitizeName(rawStep.name, "Exercise", 60),
+                duration: clampInt(rawStep.duration, 1, 3600, 30),
+                repeats: clampInt(rawStep.repeats, 1, 20, 1)
+            });
+        }
+
+        return workout;
+    }
+
+    persistWorkout() {
+        const payload = {
+            version: STORAGE_SCHEMA_VERSION,
+            workout: this.workout
+        };
+
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        } catch (error) {
+            this.toast("Could not save to local storage.", "error");
+        }
     }
 
     loadWorkout() {
-        const selectedWorkout = this.workoutSelector.value;
-        if (!selectedWorkout) return;
-        
-        const workout = this.savedWorkouts[selectedWorkout];
-        if (workout) {
-            this.exercises = JSON.parse(JSON.stringify(workout.exercises));
-            this.renderExerciseList();
-            this.saveToLocalStorage();
-            alert('Workout loaded successfully!');
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+            return buildDefaultWorkout();
         }
+
+        try {
+            const parsed = JSON.parse(raw);
+            const workout = this.sanitizeWorkout(parsed);
+            if (workout) {
+                return workout;
+            }
+        } catch (error) {
+            console.error("Failed to load saved workout", error);
+        }
+
+        return buildDefaultWorkout();
     }
 
-    deleteWorkout() {
-        const selectedWorkout = this.workoutSelector.value;
-        if (!selectedWorkout) return;
-        
-        if (confirm('Are you sure you want to delete this workout?')) {
-            delete this.savedWorkouts[selectedWorkout];
-            this.saveToLocalStorage();
-            this.updateWorkoutSelector();
-        }
-    }
-
-    updateWorkoutSelector() {
-        const options = ['<option value="">Select a workout...</option>'];
-        
-        for (let name in this.savedWorkouts) {
-            const workout = this.savedWorkouts[name];
-            const date = new Date(workout.date).toLocaleDateString();
-            options.push(`<option value="${name}">${name} (${date})</option>`);
-        }
-        
-        this.workoutSelector.innerHTML = options.join('');
-    }
-
-    addToHistory() {
-        const workout = {
-            id: Date.now(),
-            date: new Date().toLocaleDateString(),
-            time: new Date().toLocaleTimeString(),
-            duration: this.formatDuration(this.totalTime),
-            exercises: this.exercises.length,
-            totalTime: this.totalTime
+    exportWorkout() {
+        const payload = {
+            version: STORAGE_SCHEMA_VERSION,
+            exportedAt: new Date().toISOString(),
+            workout: this.workout
         };
-        
-        this.workoutHistory.unshift(workout);
-        
-        // Keep only last 20 workouts
-        if (this.workoutHistory.length > 20) {
-            this.workoutHistory = this.workoutHistory.slice(0, 20);
-        }
-        
-        this.saveToLocalStorage();
-        this.renderHistory();
+
+        const json = JSON.stringify(payload, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+
+        const name = this.workout.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "workout";
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${name}.json`;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+
+        this.toast("Workout exported.", "success");
     }
 
-    formatDuration(seconds) {
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const secs = seconds % 60;
-        
-        if (hours > 0) {
-            return `${hours}h ${minutes}m ${secs}s`;
-        } else if (minutes > 0) {
-            return `${minutes}m ${secs}s`;
-        } else {
-            return `${secs}s`;
-        }
-    }
-
-    renderHistory() {
-        if (this.workoutHistory.length === 0) {
-            this.historyList.innerHTML = '<div class="empty-history">No workout history yet. Start your first workout!</div>';
+    async importWorkout(event) {
+        const file = event.target.files?.[0];
+        if (!file) {
             return;
         }
-        
-        this.historyList.innerHTML = this.workoutHistory.map(workout => `
-            <div class="history-item">
-                <div class="history-info">
-                    <div class="history-date">${workout.date} at ${workout.time}</div>
-                    <div class="history-duration">
-                        ${workout.duration} • ${workout.exercises} exercises
-                    </div>
-                </div>
-                <button class="history-delete" onclick="timer.deleteFromHistory(${workout.id})">×</button>
-            </div>
-        `).join('');
-    }
 
-    deleteFromHistory(id) {
-        this.workoutHistory = this.workoutHistory.filter(workout => workout.id !== id);
-        this.saveToLocalStorage();
-        this.renderHistory();
-    }
-
-    clearHistory() {
-        if (confirm('Are you sure you want to clear all workout history?')) {
-            this.workoutHistory = [];
-            this.saveToLocalStorage();
-            this.renderHistory();
-        }
-    }
-
-    saveToLocalStorage() {
-        const data = {
-            workoutHistory: this.workoutHistory,
-            exercises: this.exercises,
-            savedWorkouts: this.savedWorkouts
-        };
-        localStorage.setItem('workoutTimer', JSON.stringify(data));
-    }
-
-    loadFromLocalStorage() {
-        const saved = localStorage.getItem('workoutTimer');
-        if (saved) {
-            try {
-                const data = JSON.parse(saved);
-                this.workoutHistory = data.workoutHistory || [];
-                this.exercises = data.exercises || [];
-                this.savedWorkouts = data.savedWorkouts || {};
-            } catch (error) {
-                console.error('Error loading from localStorage:', error);
+        try {
+            const content = await file.text();
+            const parsed = JSON.parse(content);
+            const workout = this.sanitizeWorkout(parsed);
+            if (!workout) {
+                throw new Error("Invalid workout file");
             }
+
+            this.workout = workout;
+            this.commitAndRender();
+            this.toast("Workout imported.", "success");
+        } catch (error) {
+            this.toast("Invalid JSON workout file.", "error");
+        } finally {
+            event.target.value = "";
         }
+    }
+
+    toast(message, type = "info") {
+        const toast = document.createElement("div");
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        this.toastContainer.append(toast);
+
+        window.setTimeout(() => {
+            toast.remove();
+        }, 2600);
     }
 }
 
-// Initialize the timer when the page loads
-let timer;
-document.addEventListener('DOMContentLoaded', () => {
-    timer = new WorkoutTimer();
-});
-
-// Add keyboard shortcuts
-document.addEventListener('keydown', (e) => {
-    if (!timer) return;
-    
-    switch(e.code) {
-        case 'Space':
-            e.preventDefault();
-            if (timer.isRunning && !timer.isPaused) {
-                timer.pauseTimer();
-            } else if (timer.isRunning && timer.isPaused) {
-                timer.pauseTimer(); // This will resume
-            } else if (!timer.isRunning) {
-                timer.startTimer();
-            }
-            break;
-        case 'KeyR':
-            if (e.ctrlKey || e.metaKey) {
-                e.preventDefault();
-                timer.resetTimer();
-            }
-            break;
-        case 'Escape':
-            if (timer.isFullscreen) {
-                timer.stopTimer();
-            }
-            break;
-    }
+document.addEventListener("DOMContentLoaded", () => {
+    new WorkoutApp();
 });
