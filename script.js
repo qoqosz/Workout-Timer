@@ -80,6 +80,8 @@ class WorkoutApp {
     constructor() {
         this.workout = this.loadWorkout();
         this.runner = this.createRunnerState();
+        this.audioContext = null;
+        this.soundEnabled = true;
 
         this.workoutNameInput = document.getElementById("workoutName");
         this.countdownInput = document.getElementById("countdownInput");
@@ -108,11 +110,13 @@ class WorkoutApp {
         this.pauseResumeBtn = document.getElementById("pauseResumeBtn");
         this.skipBtn = document.getElementById("skipBtn");
         this.stopBtn = document.getElementById("stopBtn");
+        this.soundToggleBtn = document.getElementById("soundToggleBtn");
 
         this.toastContainer = document.getElementById("toastContainer");
 
         this.bindEvents();
         this.render();
+        this.updateSoundToggleUI();
     }
 
     createRunnerState() {
@@ -130,16 +134,19 @@ class WorkoutApp {
 
     bindEvents() {
         this.addExerciseBtn.addEventListener("click", () => {
+            this.ensureAudioContext();
             this.workout.steps.push(createExercise());
             this.commitAndRender();
         });
 
         this.addRestBtn.addEventListener("click", () => {
+            this.ensureAudioContext();
             this.workout.steps.push(createExercise({ name: "Rest", duration: 20, repeats: 1 }));
             this.commitAndRender();
         });
 
         this.addGroupBtn.addEventListener("click", () => {
+            this.ensureAudioContext();
             this.workout.steps.push(createGroup());
             this.commitAndRender();
         });
@@ -176,6 +183,7 @@ class WorkoutApp {
         this.pauseResumeBtn.addEventListener("click", () => this.togglePauseResume());
         this.skipBtn.addEventListener("click", () => this.skipCurrent());
         this.stopBtn.addEventListener("click", () => this.stopWorkout());
+        this.soundToggleBtn.addEventListener("click", () => this.toggleSound());
 
         document.addEventListener("keydown", (event) => {
             if (!this.runnerOverlay.classList.contains("active")) {
@@ -197,6 +205,65 @@ class WorkoutApp {
                 this.stopWorkout();
             }
         });
+    }
+
+    ensureAudioContext() {
+        if (this.audioContext) {
+            if (this.audioContext.state === "suspended") {
+                this.audioContext.resume().catch(() => {});
+            }
+            return;
+        }
+
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) {
+            return;
+        }
+
+        try {
+            this.audioContext = new AudioCtx();
+            if (this.audioContext.state === "suspended") {
+                this.audioContext.resume().catch(() => {});
+            }
+        } catch (error) {
+            this.audioContext = null;
+        }
+    }
+
+    playTick() {
+        if (!this.audioContext || !this.soundEnabled) {
+            return;
+        }
+
+        const now = this.audioContext.currentTime;
+        const oscillator = this.audioContext.createOscillator();
+        const gainNode = this.audioContext.createGain();
+
+        oscillator.type = "square";
+        oscillator.frequency.setValueAtTime(1200, now);
+        gainNode.gain.setValueAtTime(0.0001, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.05, now + 0.005);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+        oscillator.start(now);
+        oscillator.stop(now + 0.055);
+    }
+
+    toggleSound() {
+        this.soundEnabled = !this.soundEnabled;
+        this.updateSoundToggleUI();
+    }
+
+    updateSoundToggleUI() {
+        if (!this.soundToggleBtn) {
+            return;
+        }
+
+        this.soundToggleBtn.textContent = this.soundEnabled ? "🔊" : "🔇";
+        this.soundToggleBtn.setAttribute("aria-pressed", this.soundEnabled ? "true" : "false");
+        this.soundToggleBtn.title = this.soundEnabled ? "Sound on" : "Sound off";
     }
 
     handleStepAction(event) {
@@ -279,7 +346,8 @@ class WorkoutApp {
         }
 
         this.applyBinding(target, { commit: true });
-        this.commitAndRender();
+        this.persistWorkout();
+        this.renderSummary();
     }
 
     applyBinding(target, options = { commit: true }) {
@@ -722,6 +790,7 @@ class WorkoutApp {
         if (this.runner.status !== "idle") {
             return;
         }
+        this.ensureAudioContext();
 
         const sequence = this.expandWorkout();
         if (sequence.length === 0) {
@@ -769,6 +838,13 @@ class WorkoutApp {
         this.updateRunnerControls();
     }
 
+    isRestStep(step) {
+        if (!step || typeof step.name !== "string") {
+            return false;
+        }
+        return step.name.trim().toLowerCase() === "rest";
+    }
+
     clearRunnerTimer() {
         if (this.runner.timerId) {
             window.clearInterval(this.runner.timerId);
@@ -784,6 +860,7 @@ class WorkoutApp {
             }
 
             this.runner.countdownRemaining -= 1;
+            this.playTick();
             if (this.runner.countdownRemaining <= 0) {
                 this.clearRunnerTimer();
                 this.setRunnerStatus("running");
@@ -805,6 +882,7 @@ class WorkoutApp {
 
             this.runner.stepRemaining = Math.max(0, this.runner.stepRemaining - 1);
             this.runner.totalRemaining = Math.max(0, this.runner.totalRemaining - 1);
+            this.playTick();
 
             if (this.runner.stepRemaining <= 0) {
                 this.advanceStep(false);
@@ -961,6 +1039,14 @@ class WorkoutApp {
             timerLabel = this.formatClock(this.runner.stepRemaining);
             stepDone = safeCurrent.duration - this.runner.stepRemaining;
             stepTotal = safeCurrent.duration;
+
+            if (this.isRestStep(safeCurrent)) {
+                this.runnerOverlay.dataset.phase = "rest";
+            } else if (this.runner.stepRemaining <= 10) {
+                this.runnerOverlay.dataset.phase = "warning";
+            } else {
+                this.runnerOverlay.dataset.phase = "work";
+            }
         }
 
         const totalDone = this.runner.totalDuration - this.runner.totalRemaining;
@@ -975,6 +1061,10 @@ class WorkoutApp {
 
         this.stepProgressBar.style.width = `${this.percent(stepDone, stepTotal)}%`;
         this.totalProgressBar.style.width = `${this.percent(totalDone, this.runner.totalDuration)}%`;
+
+        if (status === "countdown" || status === "countdown-paused" || status === "finished") {
+            this.runnerOverlay.dataset.phase = "default";
+        }
 
         this.updateRunnerControls();
     }

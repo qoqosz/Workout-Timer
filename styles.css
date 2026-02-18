@@ -387,6 +387,16 @@ body.runner-open {
     background: linear-gradient(135deg, #0d6e47 0%, #15a96a 100%);
 }
 
+.runner-overlay[data-phase="rest"][data-mode="running"],
+.runner-overlay[data-phase="rest"][data-mode="paused"] {
+    background: linear-gradient(135deg, #0d4ed8 0%, #38bdf8 100%);
+}
+
+.runner-overlay[data-phase="warning"][data-mode="running"],
+.runner-overlay[data-phase="warning"][data-mode="paused"] {
+    background: linear-gradient(135deg, #b91c1c 0%, #ef4444 100%);
+}
+
 .runner-noise {
     position: absolute;
     inset: 0;
@@ -481,6 +491,13 @@ body.runner-open {
     gap: 0.65rem;
     flex-wrap: wrap;
     margin-top: 0.2rem;
+}
+
+.sound-toggle-btn {
+    min-width: 46px;
+    width: 46px;
+    padding: 0.5rem 0;
+    font-size: 1.05rem;
 }
 
 .toast-container {
